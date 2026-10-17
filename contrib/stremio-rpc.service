@@ -1,0 +1,11 @@
+[Unit]
+Description=Discord Rich Presence for Stremio
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/node --no-warnings %h/.local/opt/projects/stremio-rpc/src/index.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
