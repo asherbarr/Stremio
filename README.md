@@ -1,4 +1,4 @@
-# Stremio Presence
+# Stremio
 
 Discord RPC (Rich Presence) for the official Stremio Linux app (Flathub `com.stremio.Stremio`).
 
