@@ -1,6 +1,6 @@
-# stremio-rpc
+# Stremio Presence
 
-Discord Rich Presence for the official Stremio Linux app (Flathub `com.stremio.Stremio`).
+Discord RPC (Rich Presence) for the official Stremio Linux app (Flathub `com.stremio.Stremio`).
 
 The official app plays through libmpv, so HEVC and everything else just works. Its built-in
 Discord presence is off. This small service shows the same presence Stremio Enhanced used to:
