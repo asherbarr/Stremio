@@ -43,5 +43,5 @@ npm install
 .\contrib\install-windows.ps1
 ```
 
-This registers a Scheduled Task (the Windows equivalent of the systemd unit) that starts
-the service at logon, hidden.
+This drops a shortcut into your Startup folder (the Windows equivalent of the systemd unit)
+that starts the service at logon, hidden, and starts it immediately too.

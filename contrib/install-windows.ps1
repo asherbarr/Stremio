@@ -1,21 +1,23 @@
-# Windows equivalent of installing contrib/stremio-rpc.service: registers a Scheduled Task
-# that starts the RPC service at logon, hidden (no console window), restarting on logon only
-# (Task Scheduler has no systemd-style "Restart=on-failure"; the service itself reconnects
-# to Discord on its own, see discord-rpc.js).
+# Windows equivalent of installing contrib/stremio-rpc.service: starts the RPC service at
+# logon, hidden (no console window). Uses a shortcut in the user's Startup folder rather
+# than a Scheduled Task, since registering a task requires admin rights this installer
+# shouldn't assume it has; Startup-folder shortcuts need none.
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $entry = Join-Path $repoRoot "src\index.js"
-$taskName = "StremioDiscordRPC"
+$startupDir = [Environment]::GetFolderPath("Startup")
+$shortcutPath = Join-Path $startupDir "StremioDiscordRPC.lnk"
 
-$node = (Get-Command node.exe).Source
-$action = New-ScheduledTaskAction -Execute $node -Argument "--no-warnings `"$entry`"" -WorkingDirectory $repoRoot
-$trigger = New-ScheduledTaskTrigger -AtLogOn
-$settings = New-ScheduledTaskSettingsSet -Hidden -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
+$ws = New-Object -ComObject WScript.Shell
+$s = $ws.CreateShortcut($shortcutPath)
+$s.TargetPath = "powershell.exe"
+$s.Arguments = "-NoProfile -WindowStyle Hidden -Command `"& '$((Get-Command node.exe).Source)' --no-warnings '$entry'`""
+$s.WorkingDirectory = $repoRoot
+$s.Description = "Discord Rich Presence for Stremio"
+$s.Save()
 
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
-
-Write-Host "Registered scheduled task '$taskName'. Starting it now..."
-Start-ScheduledTask -TaskName $taskName
+Write-Host "Installed startup shortcut: $shortcutPath"
+Write-Host "Starting it now..."
+Start-Process powershell.exe -ArgumentList "-NoProfile -WindowStyle Hidden -Command `"& '$((Get-Command node.exe).Source)' --no-warnings '$entry'`""
 Write-Host "Logs: run 'node src\index.js' manually in a terminal to see console output."
