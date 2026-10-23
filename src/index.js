@@ -2,7 +2,8 @@
 // shown only while a video is open, "Watching" / "Watching S1 E2" with a time bar while
 // playing, "Paused at HH:MM:SS" while paused, cleared everywhere else.
 const discord = require("./discord-rpc");
-const { readPlayer, readLibraryItem, idFromArtUrl } = require("./stremio");
+const { readPlayer, readLibraryItem, idFromArtUrl } =
+  process.platform === "win32" ? require("./stremio.win") : require("./stremio");
 
 const POLL_INTERVAL = 1000;
 

@@ -29,3 +29,19 @@ systemctl --user enable --now stremio-rpc.service
 Logs: `journalctl --user -u stremio-rpc -f`
 
 Requires Node 22+ (uses the built-in `node:sqlite`).
+
+## Windows
+
+Playback/title comes from the Windows System Media Transport Controls session instead of
+MPRIS, and the library lookup searches Stremio's Windows storage locations instead of the
+Flatpak path — see `src/stremio.win.js`. The library read is best-effort (Chromium's
+LocalStorage format can vary by build), so if it can't find it, the presence still works
+from the title alone, just without poster/episode info.
+
+```powershell
+npm install
+.\contrib\install-windows.ps1
+```
+
+This registers a Scheduled Task (the Windows equivalent of the systemd unit) that starts
+the service at logon, hidden.
