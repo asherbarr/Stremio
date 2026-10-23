@@ -32,17 +32,21 @@ Requires Node 22+ (uses the built-in `node:sqlite`).
 
 ## Windows
 
-Playback/title comes from the Windows System Media Transport Controls (SMTC) session
-instead of MPRIS — only a session whose app id contains "stremio" is used, never whatever
-else happens to be playing (Spotify, a browser tab, etc.). The library lookup reads
-Stremio's LevelDB local storage (confirmed path: `%LOCALAPPDATA%\Smart Code ltd\Stremio\
-QtWebEngine\Default\Local Storage\leveldb`), via a throwaway copy since Stremio holds the
-real one open — see `src/stremio.win.js`. The library read is best-effort, so if it can't
-find it, the presence still works from the title alone, just without poster/episode info.
+Stremio's QtWebEngine shell doesn't register a Windows System Media Transport Controls
+session (confirmed against a real, actively-playing stream — only unrelated apps like
+Spotify showed up there), so there's no MPRIS equivalent to read play/pause and title from.
+Instead, "is a video open" comes from Stremio's own local streaming server
+(`http://127.0.0.1:11470/stats.json`), which lists the active torrent/file while one is
+loaded. This has no pause signal (the engine keeps buffering while paused), so unlike
+Linux, the Windows RPC can't show "Paused at HH:MM:SS" — it's "Watching" for as long as
+something's open, full stop.
 
-Not yet confirmed: whether Stremio's QtWebEngine shell actually registers an SMTC session
-while a video is playing (it wasn't tested against a real stream). If Discord never shows
-anything while you're watching, that's the first thing to check.
+The library item (name/poster/episode/saved position) still comes from local storage like
+Linux, just LevelDB instead of sqlite (confirmed path: `%LOCALAPPDATA%\Smart Code ltd\
+Stremio\QtWebEngine\Default\Local Storage\leveldb`), read via a throwaway copy since
+Stremio holds the real file open — see `src/stremio.win.js`. Best-effort: if it can't find
+it, the presence still works from the torrent's filename, just without poster/episode info
+or a time bar.
 
 ```powershell
 npm install

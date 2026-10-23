@@ -1,23 +1,39 @@
 // Windows port of stremio.js.
 //
 // Linux version reads MPRIS over D-Bus + Stremio's Flatpak sqlite local-storage file.
-// Neither exists on Windows, so this reads:
-//  - playback state/title from the Windows System Media Transport Controls (SMTC) session,
-//    via a small PowerShell/WinRT bridge (src/win/get-media-session.ps1) — the Windows
-//    equivalent of MPRIS for apps built on Chromium/QtWebEngine (Stremio's desktop shell).
-//  - the library item from Stremio's local storage. Unlike the Linux Flatpak build (old
-//    WebKit sqlite format), the Windows build's QtWebEngine shell uses modern Chromium
-//    LevelDB local storage (confirmed at
-//    "%LOCALAPPDATA%\Smart Code ltd\Stremio\QtWebEngine\Default\Local Storage\leveldb").
-//    Entry keys are "_" + an 8-byte per-origin map id + the JS key as UTF-16LE, so rather
-//    than reconstruct the origin id we just scan all keys for one ending in the
-//    "library_recent" marker. Best-effort: if the schema shifts again, the RPC still works
-//    from the SMTC title alone, just without poster/episode data.
-const { execFile } = require("child_process");
+// Neither exists on Windows. Tried the Windows System Media Transport Controls (SMTC)
+// session first (the usual equivalent of MPRIS for Chromium/QtWebEngine apps) — confirmed
+// against a real, actively-playing stream that Stremio's QtWebEngine shell never registers
+// one (only unrelated apps like Spotify showed up), so that approach is dead.
+//
+// What actually works, confirmed against a real stream: Stremio's local streaming server
+// (http://127.0.0.1:11470/stats.json) exposes the active torrent/file while something is
+// loaded, which is the "is a video open" signal MPRIS's PlaybackStatus gave us on Linux.
+// It has no play/pause distinction (the engine keeps buffering while paused), so this
+// reports "Playing" for as long as something's loaded and can't show "Paused at HH:MM:SS"
+// the way the Linux version does.
+//
+// The library item (name/poster/episode/position) still comes from Stremio's local
+// storage, same as Linux — just LevelDB instead of sqlite (the Windows build's QtWebEngine
+// shell uses modern Chromium local storage, confirmed at "%LOCALAPPDATA%\Smart Code ltd\
+// Stremio\QtWebEngine\Default\Local Storage\leveldb"). Entry keys are "_" + an 8-byte
+// per-origin map id + the JS key as UTF-16LE, so rather than reconstruct the origin id we
+// just scan all keys for one ending in the "library_recent" marker.
 const { ClassicLevel } = require("classic-level");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+
+const STATS_URL = "http://127.0.0.1:11470/stats.json";
+
+// Scene-release filename -> rough display title, used only when the library lookup
+// below doesn't have a matching item yet (e.g. first few seconds of a brand new stream).
+function titleFromFilename(filename) {
+  let name = filename.replace(/\.\w{2,4}$/, "").replace(/[._]/g, " ");
+  const cut = name.match(/^(.*?)(?:\s+(?:19|20)\d{2}\b|\s+(?:1080p|720p|2160p|4K|WEBRip|BluRay|HDRip)\b)/i);
+  if (cut) name = cut[1];
+  return name.trim();
+}
 
 // LevelDB takes an exclusive lock on open, which fails while Stremio itself has the
 // database open (i.e. whenever it's running at all). Read a throwaway copy instead,
@@ -30,36 +46,32 @@ function snapshotDb(dbPath) {
   return SNAPSHOT_DIR;
 }
 
-const PS_SCRIPT = path.join(__dirname, "win", "get-media-session.ps1");
-
 const STORAGE_ROOTS = [
   path.join(os.homedir(), "AppData", "Local", "Smart Code ltd", "Stremio", "QtWebEngine", "Default", "Local Storage", "leveldb"),
-  path.join(os.homedir(), "AppData", "Roaming", "stremio", "stremio-shell"),
 ];
 
-function runPowerShell() {
-  return new Promise((resolve) => {
-    execFile(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", PS_SCRIPT],
-      { timeout: 5000, windowsHide: true },
-      (err, stdout) => {
-        if (err) return resolve(null);
-        try {
-          resolve(JSON.parse(stdout.trim()));
-        } catch {
-          resolve(null);
-        }
-      }
-    );
-  });
-}
-
-// Returns { status, title, artUrl } or null when nothing is playing, matching the Linux shape.
+// Returns { status, title, artUrl } or null when nothing is loaded, matching the Linux shape.
+// Always reports "Playing" (see file header: the streaming-server API has no pause signal).
 async function readPlayer() {
-  const info = await runPowerShell();
-  if (!info || info.status === "Stopped" || !info.title) return null;
-  return { status: info.status, title: info.title, artUrl: "" };
+  let stats;
+  try {
+    const res = await fetch(STATS_URL, { signal: AbortSignal.timeout(3000) });
+    stats = await res.json();
+  } catch {
+    return null; // Stremio not running, or its server isn't up yet.
+  }
+
+  const torrents = Object.values(stats || {});
+  if (torrents.length === 0) return null;
+
+  // The library item (set by index.js's own readLibraryItem call, matched by name) gives
+  // a clean title; fall back to the raw torrent filename if the library hasn't caught up.
+  const item = await readLibraryItem(null);
+  const file = torrents[0].files?.[0];
+  const title = item?.name || (file ? titleFromFilename(file.name) : torrents[0].name);
+  if (!title) return null;
+
+  return { status: "Playing", title, artUrl: "" };
 }
 
 const LIBRARY_KEY_NEEDLE = Buffer.from("library_recent", "utf16le");
