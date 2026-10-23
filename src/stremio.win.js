@@ -5,21 +5,36 @@
 //  - playback state/title from the Windows System Media Transport Controls (SMTC) session,
 //    via a small PowerShell/WinRT bridge (src/win/get-media-session.ps1) — the Windows
 //    equivalent of MPRIS for apps built on Chromium/QtWebEngine (Stremio's desktop shell).
-//  - the library item from Stremio's local-storage sqlite file, searched across the
-//    Windows install locations Stremio is known to use. Chromium LocalStorage format can
-//    vary by the embedding shell's version, so this is best-effort: if it can't be read,
-//    the RPC still works from the SMTC title alone, just without poster/episode data.
+//  - the library item from Stremio's local storage. Unlike the Linux Flatpak build (old
+//    WebKit sqlite format), the Windows build's QtWebEngine shell uses modern Chromium
+//    LevelDB local storage (confirmed at
+//    "%LOCALAPPDATA%\Smart Code ltd\Stremio\QtWebEngine\Default\Local Storage\leveldb").
+//    Entry keys are "_" + an 8-byte per-origin map id + the JS key as UTF-16LE, so rather
+//    than reconstruct the origin id we just scan all keys for one ending in the
+//    "library_recent" marker. Best-effort: if the schema shifts again, the RPC still works
+//    from the SMTC title alone, just without poster/episode data.
 const { execFile } = require("child_process");
+const { ClassicLevel } = require("classic-level");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
+// LevelDB takes an exclusive lock on open, which fails while Stremio itself has the
+// database open (i.e. whenever it's running at all). Read a throwaway copy instead,
+// same trick browser-history readers use to read Chrome's SQLite while Chrome is open.
+const SNAPSHOT_DIR = path.join(os.tmpdir(), "stremio-rpc-leveldb-snapshot");
+
+function snapshotDb(dbPath) {
+  fs.rmSync(SNAPSHOT_DIR, { recursive: true, force: true });
+  fs.cpSync(dbPath, SNAPSHOT_DIR, { recursive: true, force: true });
+  return SNAPSHOT_DIR;
+}
+
 const PS_SCRIPT = path.join(__dirname, "win", "get-media-session.ps1");
 
 const STORAGE_ROOTS = [
+  path.join(os.homedir(), "AppData", "Local", "Smart Code ltd", "Stremio", "QtWebEngine", "Default", "Local Storage", "leveldb"),
   path.join(os.homedir(), "AppData", "Roaming", "stremio", "stremio-shell"),
-  path.join(os.homedir(), "AppData", "Roaming", "stremio"),
-  path.join(os.homedir(), "AppData", "Local", "stremio"),
 ];
 
 function runPowerShell() {
@@ -47,48 +62,50 @@ async function readPlayer() {
   return { status: info.status, title: info.title, artUrl: "" };
 }
 
-function findStorageDb() {
-  for (const root of STORAGE_ROOTS) {
+const LIBRARY_KEY_NEEDLE = Buffer.from("library_recent", "utf16le");
+
+// Chromium LocalStorage values are tag-prefixed: try the tags we might see
+// (0 = UTF-16LE, 1 = Latin1/ASCII) and fall back to UTF-8 for good measure.
+function decodeValue(buf) {
+  const body = buf.subarray(1);
+  const tag = buf[0];
+  const encodings = tag === 1 ? ["latin1", "utf16le", "utf8"] : ["utf16le", "latin1", "utf8"];
+  for (const enc of encodings) {
     try {
-      for (const a of fs.readdirSync(root)) {
-        const dir = path.join(root, a);
-        if (!fs.statSync(dir).isDirectory()) continue;
-        for (const b of fs.readdirSync(dir)) {
-          const db = path.join(dir, b, "LocalStorage", "localstorage.sqlite3");
-          if (fs.existsSync(db)) return db;
-        }
-      }
+      return JSON.parse(body.toString(enc));
     } catch {}
   }
   return null;
 }
 
-let DatabaseSync = null;
-function openDb(file) {
-  if (!DatabaseSync) DatabaseSync = require("node:sqlite").DatabaseSync;
-  return new DatabaseSync(file, { readOnly: true });
-}
-
-// Same as Linux: Stremio's library entry for an id, or the most recently watched one.
-function readLibraryItem(id) {
-  const file = findStorageDb();
-  if (!file) return null;
-  let db;
-  try {
-    db = openDb(file);
-    const row = db.prepare("SELECT value FROM ItemTable WHERE key = 'library_recent'").get();
-    if (!row) return null;
-    const lib = JSON.parse(Buffer.from(row.value).toString("utf16le"));
-    const items = Object.values(lib.items || {});
-    if (id && lib.items?.[id]) return lib.items[id];
-    items.sort((x, y) => String(y.state?.lastWatched).localeCompare(String(x.state?.lastWatched)));
-    return items[0] || null;
-  } catch (err) {
-    console.warn("[stremio] Failed to read library (non-fatal on Windows):", err.message);
-    return null;
-  } finally {
-    try { db?.close(); } catch {}
+// Same shape as Linux: Stremio's library entry for an id, or the most recently watched one.
+async function readLibraryItem(id) {
+  for (const dbPath of STORAGE_ROOTS) {
+    let db;
+    try {
+      if (!fs.existsSync(dbPath)) continue;
+      const snapshotPath = snapshotDb(dbPath);
+      db = new ClassicLevel(snapshotPath, { keyEncoding: "buffer", valueEncoding: "buffer", createIfMissing: false });
+      await db.open();
+      let lib = null;
+      for await (const [key, value] of db.iterator()) {
+        if (key.includes(LIBRARY_KEY_NEEDLE)) {
+          lib = decodeValue(value);
+          break;
+        }
+      }
+      if (!lib) continue;
+      const items = Object.values(lib.items || {});
+      if (id && lib.items?.[id]) return lib.items[id];
+      items.sort((x, y) => String(y.state?.lastWatched).localeCompare(String(x.state?.lastWatched)));
+      return items[0] || null;
+    } catch (err) {
+      console.warn("[stremio] Failed to read library from", dbPath, "(non-fatal):", err.message);
+    } finally {
+      try { await db?.close(); } catch {}
+    }
   }
+  return null;
 }
 
 // No MPRIS artUrl on Windows, so there's no id to extract. Library lookup falls back to

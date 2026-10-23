@@ -61,7 +61,7 @@ async function tick() {
     }
 
     const id = idFromArtUrl(player.artUrl);
-    let item = readLibraryItem(id);
+    let item = await readLibraryItem(id);
     if (item && !(id ? item._id === id : item.name === player.title)) item = null;
 
     const key = `${id || player.title}|${item?.state?.video_id || ""}`;

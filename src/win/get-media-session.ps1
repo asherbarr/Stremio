@@ -28,7 +28,8 @@ try {
     foreach ($s in $sessions) {
         if ($s.SourceAppUserModelId -match "stremio") { $target = $s; break }
     }
-    if (-not $target -and $sessions.Count -gt 0) { $target = $sessions[0] }
+    # Deliberately no fallback to "whatever session exists" — that would report some other
+    # app's playback (a browser tab, Spotify, etc.) as if it were Stremio.
 
     if (-not $target) {
         Write-Output '{"status":"Stopped"}'

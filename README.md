@@ -32,11 +32,17 @@ Requires Node 22+ (uses the built-in `node:sqlite`).
 
 ## Windows
 
-Playback/title comes from the Windows System Media Transport Controls session instead of
-MPRIS, and the library lookup searches Stremio's Windows storage locations instead of the
-Flatpak path — see `src/stremio.win.js`. The library read is best-effort (Chromium's
-LocalStorage format can vary by build), so if it can't find it, the presence still works
-from the title alone, just without poster/episode info.
+Playback/title comes from the Windows System Media Transport Controls (SMTC) session
+instead of MPRIS — only a session whose app id contains "stremio" is used, never whatever
+else happens to be playing (Spotify, a browser tab, etc.). The library lookup reads
+Stremio's LevelDB local storage (confirmed path: `%LOCALAPPDATA%\Smart Code ltd\Stremio\
+QtWebEngine\Default\Local Storage\leveldb`), via a throwaway copy since Stremio holds the
+real one open — see `src/stremio.win.js`. The library read is best-effort, so if it can't
+find it, the presence still works from the title alone, just without poster/episode info.
+
+Not yet confirmed: whether Stremio's QtWebEngine shell actually registers an SMTC session
+while a video is playing (it wasn't tested against a real stream). If Discord never shows
+anything while you're watching, that's the first thing to check.
 
 ```powershell
 npm install
